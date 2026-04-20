@@ -1,0 +1,16 @@
+# macOS
+.DS_Store
+
+# Referenz-Scribbles (nicht im Repo nötig)
+*.HEIC
+*.jpg
+*.jpeg
+
+# Claude-Code Projektsettings
+/.claude/
+
+# Editor/OS
+*.swp
+*.swo
+.idea/
+.vscode/
