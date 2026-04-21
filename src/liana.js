@@ -29,7 +29,6 @@ export class Liana {
   }
 
   draw(ctx, grabbed, grabT) {
-    if (this.hidden) return;  // Palm-Wedel-Grab-Targets: nur Physik, kein Rendering
     // Seil als gewellte Linie vom Anker zur Spitze, mit dichten Segmenten (damit's biegsam aussieht).
     const segs = 10;
     const basePts = [];
