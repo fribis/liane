@@ -7,8 +7,12 @@ import { buildLevel1 } from './level.js';
 import { Player } from './player.js';
 import { camera, followCamera, centerCameraOn } from './camera.js';
 import { aabbOverlap } from './physics.js';
-import { drawMenu, drawWin, drawLose, drawTimerHud, drawPowerupHud } from './ui.js';
+import { drawMenu, drawWin, drawLose, drawTimerHud, drawPowerupHud, drawAirBlastHud } from './ui.js';
 import { POWERUP_DURATION } from './powerup.js';
+import { Bubble } from './bubble.js';
+
+const BUBBLE_INTERVAL = 0.35;   // Sekunden zwischen Auto-Shots
+const BUBBLE_RANGE = 520;       // Ziel-Suchradius
 
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
@@ -38,6 +42,9 @@ function saveBestMs(ms) {
   return false;
 }
 
+// Aktive Projektile
+let bubbles = [];
+
 function startGame() {
   level = buildLevel1();
   player = new Player(level.start.x, level.start.y);
@@ -46,13 +53,27 @@ function startGame() {
   startTime = performance.now();
   elapsedMs = 0;
   finalMs = 0;
+  bubbles = [];
+}
+
+function nearestEnemy(fromX, fromY, maxDist) {
+  let best = null; let bestD = maxDist;
+  for (const e of level.enemies) {
+    if (e.dead || e.dying) continue;
+    const a = e.aabb;
+    const ex = a.x + a.w / 2;
+    const ey = a.y + a.h / 2;
+    const d = Math.hypot(ex - fromX, ey - fromY);
+    if (d < bestD) { bestD = d; best = { e, ex, ey }; }
+  }
+  return best;
 }
 
 function checkEnemyCollisions() {
   // Dynamische Hitbox vom Spieler (beim Ducken kleiner).
   const pbox = player.hitbox;
   for (const e of level.enemies) {
-    if (e.dead) continue;
+    if (e.dead || e.dying) continue;
     if (!aabbOverlap(pbox, e.aabb)) continue;
     // Spinne: Stomp erlaubt — Spieler fällt von oben in die Stomp-Zone → Spinne tot.
     if (e.constructor.name === 'Spider') {
@@ -101,9 +122,54 @@ function loop(now) {
       pu.update(dt);
       if (!pu.collected && aabbOverlap(player.aabb, pu.aabb)) {
         pu.collected = true;
-        player.activatePowerup(POWERUP_DURATION);
+        player.activatePowerup(pu.type, POWERUP_DURATION);
       }
     }
+
+    // Auto-Fire der Luftblasen
+    if (player.hasAirBlast && player.bubbleCooldown <= 0) {
+      const target = nearestEnemy(player.cx, player.cy, BUBBLE_RANGE);
+      if (target) {
+        bubbles.push(Bubble.spawnTowards(player.cx, player.cy, target.ex, target.ey));
+        player.bubbleCooldown = BUBBLE_INTERVAL;
+      } else {
+        // Kein Gegner in Reichweite — kurzes Retry-Intervall
+        player.bubbleCooldown = 0.2;
+      }
+    }
+
+    // Bubbles updaten + Treffer prüfen
+    for (const b of bubbles) b.update(dt);
+    for (const b of bubbles) {
+      if (b.dead) continue;
+      for (const e of level.enemies) {
+        if (e.dead || e.dying) continue;
+        if (aabbOverlap(b.aabb, e.aabb)) {
+          b.dead = true;
+          // Gegner nach oben wegschleudern — wird in enemy.update weiter animiert
+          e.dying = true;
+          e.dieVx = (Math.random() - 0.5) * 160;
+          e.dieVy = -540;
+          e.dieSpin = (Math.random() - 0.5) * 10;
+          e.dieRot = 0;
+          break;
+        }
+      }
+    }
+    // Sterbende Gegner animieren (nach oben schleudern)
+    for (const e of level.enemies) {
+      if (e.dying && !e.dead) {
+        e.dieY = (e.dieY ?? 0) + e.dieVy * dt;
+        e.dieX = (e.dieX ?? 0) + e.dieVx * dt;
+        e.dieVy += 900 * dt;  // leichte Gravitation, aber Grundgeschwindigkeit zieht sie hoch raus
+        e.dieRot += e.dieSpin * dt;
+        // Wenn Gegner weit oben aus dem Bild → final tot
+        const baseY = (e.y ?? (e.aabb.y + e.aabb.h / 2));
+        if (baseY + (e.dieY || 0) < -80) e.dead = true;
+      }
+    }
+    // Abgeräumte Bubbles entfernen
+    bubbles = bubbles.filter(b => !b.dead && b.life > 0);
 
     // Fahne
     level.flag.update(dt);
@@ -157,7 +223,7 @@ function render() {
   for (const pu of level?.powerups || []) pu.draw(ctx);
 
   // Gegner (Skorpione erst, damit Vögel vorne fliegen)
-  for (const e of level?.enemies || []) if (e.constructor.name !== 'Bird') e.draw(ctx);
+  for (const e of level?.enemies || []) if (e.constructor.name !== 'Bird') drawEnemyWithDying(e);
 
   // Fahne
   level?.flag.draw(ctx);
@@ -166,14 +232,25 @@ function render() {
   player?.draw(ctx);
 
   // Vögel ganz vorne
-  for (const e of level?.enemies || []) if (e.constructor.name === 'Bird') e.draw(ctx);
+  for (const e of level?.enemies || []) if (e.constructor.name === 'Bird') drawEnemyWithDying(e);
+
+  // Luftblasen vor allem anderen
+  for (const b of bubbles) b.draw(ctx);
 
   ctx.restore();
 
   // Timer-HUD während des Spiels
   if (mode === 'play') {
     drawTimerHud(ctx, W, H, elapsedMs, getBestMs());
-    if (player && player.poweredUp) drawPowerupHud(ctx, W, H, player.powerupRemaining, POWERUP_DURATION);
+    let slot = 0;
+    if (player && player.poweredUp) {
+      drawPowerupHud(ctx, W, H, player.jumpBoostRemaining, POWERUP_DURATION, slot);
+      slot++;
+    }
+    if (player && player.hasAirBlast) {
+      drawAirBlastHud(ctx, W, H, player.airBlastRemaining, POWERUP_DURATION, slot);
+      slot++;
+    }
   }
 
   // Overlays
@@ -184,6 +261,22 @@ function render() {
     drawWin(ctx, W, H, finalMs, best, isNew);
   }
   else if (mode === 'lose') drawLose(ctx, W, H, loseReason, finalMs);
+}
+
+// Beim Sterben rotieren die Gegner und werden nach oben verschoben.
+function drawEnemyWithDying(e) {
+  if (e.dead) return;
+  if (!e.dying) { e.draw(ctx); return; }
+  ctx.save();
+  // Bezugspunkt: Zentrum des Gegners
+  const ax = e.aabb.x + e.aabb.w / 2;
+  const ay = e.aabb.y + e.aabb.h / 2;
+  ctx.translate((e.dieX || 0), (e.dieY || 0));
+  ctx.translate(ax, ay);
+  ctx.rotate(e.dieRot || 0);
+  ctx.translate(-ax, -ay);
+  e.draw(ctx);
+  ctx.restore();
 }
 
 function drawPlatforms() {
@@ -249,7 +342,10 @@ centerCameraOn(player.x);
 // Debug-Hooks
 window.__game = {
   getMode: () => mode,
-  getPlayer: () => ({ x: player.x, y: player.y, vx: player.vx, vy: player.vy, onGround: player.onGround, swing: !!player.swing, dead: player.dead, poweredUp: player.poweredUp, powerupRemaining: player.powerupRemaining, ducking: player.ducking }),
+  getPlayer: () => ({ x: player.x, y: player.y, vx: player.vx, vy: player.vy, onGround: player.onGround, swing: !!player.swing, dead: player.dead, poweredUp: player.poweredUp, jumpBoostRemaining: player.jumpBoostRemaining, hasAirBlast: player.hasAirBlast, airBlastRemaining: player.airBlastRemaining, bubbleCooldown: player.bubbleCooldown, ducking: player.ducking }),
+  getBubbles: () => bubbles.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, life: b.life })),
+  getAliveEnemies: () => level.enemies.filter(e => !e.dead && !e.dying).length,
+  getDyingEnemies: () => level.enemies.filter(e => e.dying && !e.dead).length,
   getLevel: () => level,
   startGame,
   teleport: (x, y) => { player.x = x; player.y = y; player.vx = 0; player.vy = 0; },

@@ -12,11 +12,12 @@ export function formatTime(ms) {
 
 // Power-Up-Badge oben links (Oval mit zwei Pfeilen nach oben + Countdown),
 // wie im Scribble IMG_1220 dargestellt.
-export function drawPowerupHud(ctx, w, h, secondsLeft, totalSeconds) {
-  const cx = 80;
-  const cy = 56;
+// `slot` gibt die Position an, damit mehrere Badges nebeneinander passen.
+export function drawPowerupHud(ctx, w, h, secondsLeft, totalSeconds, slot = 0) {
   const rx = 52;
   const ry = 38;
+  const cx = 80 + slot * (rx * 2 + 24);
+  const cy = 56;
   // Oval-Hintergrund mit Füllung
   ctx.fillStyle = 'rgba(255, 240, 170, 0.85)';
   ctx.beginPath();
@@ -62,6 +63,64 @@ export function drawPowerupHud(ctx, w, h, secondsLeft, totalSeconds) {
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
   ctx.fillText(secondsLeft.toFixed(1) + 's', cx, cy + ry + 10);
+}
+
+// AirBlast-Badge: runde Luftblase mit Tupfen + Countdown-Ring.
+// Sitzt auf einer anderen Slot-Position, wenn gleichzeitig der jumpBoost aktiv ist.
+export function drawAirBlastHud(ctx, w, h, secondsLeft, totalSeconds, slot = 0) {
+  const r = 40;
+  const cx = 80 + slot * (r * 2 + 30);
+  const cy = 56;
+
+  // Blase
+  ctx.fillStyle = 'rgba(190, 230, 255, 0.92)';
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#1a1a2e';
+  ctx.lineWidth = 2.6;
+  ctx.stroke();
+
+  // Tupfen im Inneren
+  ctx.fillStyle = 'rgba(60, 130, 180, 0.85)';
+  const spots = [
+    [-10, -4, 3.5],
+    [ 8, -8, 3.0],
+    [ 2,  6, 3.8],
+    [-6,  9, 2.6],
+    [12,  5, 2.4],
+  ];
+  for (const [dx, dy, sr] of spots) {
+    ctx.beginPath();
+    ctx.arc(cx + dx, cy + dy, sr, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Glanzpunkt
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+  ctx.beginPath();
+  ctx.ellipse(cx - r * 0.45, cy - r * 0.45, r * 0.22, r * 0.12, -0.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Countdown-Ring
+  const frac = Math.max(0, Math.min(1, secondsLeft / totalSeconds));
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.12)';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 4, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.strokeStyle = '#3b9bd4';
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r + 4, -Math.PI / 2, -Math.PI / 2 + frac * Math.PI * 2);
+  ctx.stroke();
+
+  // Restzeit
+  ctx.fillStyle = '#1a1a2e';
+  ctx.font = "bold 16px 'Comic Sans MS', 'Marker Felt', sans-serif";
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(secondsLeft.toFixed(1) + 's', cx, cy + r + 10);
 }
 
 // Timer oben rechts während des Spiels.

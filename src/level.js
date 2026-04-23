@@ -135,13 +135,15 @@ export function buildLevel1() {
   ];
   spiderDefs.forEach(d => level.enemies.push(new Spider(d)));
 
-  // Power-Up-Blöcke
+  // Power-Up-Blöcke: drei Standard-jumpBoosts + ein seltener airBlast (Luftblasen).
   const powerupDefs = [
-    { x: 260,  y: 490, w: 40, h: 40 },
-    { x: 2700, y: 420, w: 40, h: 40 },
-    { x: 3600, y: 360, w: 40, h: 40 },
+    { x: 260,  y: 490, w: 40, h: 40, type: 'jumpBoost' },
+    { x: 2700, y: 420, w: 40, h: 40, type: 'jumpBoost' },
+    { x: 3600, y: 360, w: 40, h: 40, type: 'jumpBoost' },
+    // Selten: hoch über Baum 3 (Palme), erreichbar per Liane + jumpBoost — echte Belohnung
+    { x: 1720, y: 300, w: 44, h: 44, type: 'airBlast' },
   ];
-  level.powerups = powerupDefs.map(d => new PowerupBlock(d.x, d.y, d.w, d.h));
+  level.powerups = powerupDefs.map(d => new PowerupBlock(d.x, d.y, d.w, d.h, d.type));
 
   // Ziel-Fahne am rechten Ende von P5.
   level.flag = new Flag(5200, 680);

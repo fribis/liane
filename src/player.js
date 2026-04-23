@@ -23,14 +23,25 @@ export class Player {
     this.runPhase = 0;
     this.ducking = false;
     this.dead = false;
-    this.powerupRemaining = 0;    // Sekunden — aktiv wenn > 0
+    this.jumpBoostRemaining = 0;
+    this.airBlastRemaining = 0;
+    this.bubbleCooldown = 0;       // Zeit bis zum nächsten Auto-Shot
   }
 
-  activatePowerup(seconds) {
-    this.powerupRemaining = seconds;
+  activatePowerup(type, seconds) {
+    if (type === 'airBlast') {
+      this.airBlastRemaining = seconds;
+      this.bubbleCooldown = 0;  // sofort erstes Geschoss
+    } else {
+      // jumpBoost (Standard)
+      this.jumpBoostRemaining = seconds;
+    }
   }
 
-  get poweredUp() { return this.powerupRemaining > 0; }
+  get poweredUp() { return this.jumpBoostRemaining > 0; }
+  get hasAirBlast() { return this.airBlastRemaining > 0; }
+  // Für Aura/Rendering — sobald irgendein Buff aktiv ist
+  get anyBuffActive() { return this.jumpBoostRemaining > 0 || this.airBlastRemaining > 0; }
 
   // Center (für Liana-Reach-Test)
   get cx() { return this.x + this.w / 2; }
@@ -49,9 +60,13 @@ export class Player {
 
   update(dt, level) {
     this.grabCooldown = Math.max(0, this.grabCooldown - dt);
-    if (this.powerupRemaining > 0) {
-      this.powerupRemaining = Math.max(0, this.powerupRemaining - dt);
+    if (this.jumpBoostRemaining > 0) {
+      this.jumpBoostRemaining = Math.max(0, this.jumpBoostRemaining - dt);
     }
+    if (this.airBlastRemaining > 0) {
+      this.airBlastRemaining = Math.max(0, this.airBlastRemaining - dt);
+    }
+    this.bubbleCooldown = Math.max(0, this.bubbleCooldown - dt);
 
     if (this.swing) {
       this.updateSwinging(dt, level);
@@ -246,16 +261,27 @@ export class Player {
       cy = this.y + this.h - 10;
     }
 
-    // Power-Up-Aura
-    if (this.poweredUp) {
+    // Buff-Auren: jumpBoost = gold, airBlast = blau. Falls beide: Farben überlagern.
+    if (this.anyBuffActive) {
       const pulse = 0.6 + 0.4 * Math.abs(Math.sin(this.runPhase * 0.8 + performance.now() / 200));
-      const grad = ctx.createRadialGradient(cx, cy, 4, cx, cy, 38);
-      grad.addColorStop(0, `rgba(255, 220, 120, ${0.55 * pulse})`);
-      grad.addColorStop(1, 'rgba(255, 220, 120, 0)');
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.arc(cx, cy + 2, 38, 0, Math.PI * 2);
-      ctx.fill();
+      if (this.poweredUp) {
+        const grad = ctx.createRadialGradient(cx, cy, 4, cx, cy, 38);
+        grad.addColorStop(0, `rgba(255, 220, 120, ${0.55 * pulse})`);
+        grad.addColorStop(1, 'rgba(255, 220, 120, 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy + 2, 38, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      if (this.hasAirBlast) {
+        const grad = ctx.createRadialGradient(cx, cy, 4, cx, cy, 42);
+        grad.addColorStop(0, `rgba(140, 220, 255, ${0.55 * pulse})`);
+        grad.addColorStop(1, 'rgba(140, 220, 255, 0)');
+        ctx.fillStyle = grad;
+        ctx.beginPath();
+        ctx.arc(cx, cy + 2, 42, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // Rumpf-Block (schwarzer Kasten, wie Scribble)
