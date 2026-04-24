@@ -284,89 +284,233 @@ export class Player {
       }
     }
 
-    // Rumpf-Block (schwarzer Kasten, wie Scribble)
-    const bodyX = cx - 8, bodyY = cy - 6;
-    ctx.fillStyle = 'rgba(30, 30, 35, 0.92)';
-    ctx.beginPath();
-    ctx.rect(bodyX, bodyY, 16, 18);
-    ctx.fill();
+    // === Scribble-Charakter nach Vorbild IMG_1197 ===
+    // Konstruktion:
+    // - Rumpf: solider, leicht schiefer schwarzer Block (nicht exakt rechteckig)
+    // - Kopf: ovale Birne, seitlich versetzt in Blickrichtung
+    // - Wilde Frisur: mehrere abstehende Locken/Strähnen oben
+    // - Gesicht: runder "O"-Mund oder breites Grinsen + großes Auge
+    // - Dünne, wackelige Arme/Beine
+    const runT = this.runPhase;
+    // Schnelle, deterministische "Wackel"-Phase, damit das Scribble leicht lebt
+    const wobble = (i) => Math.sin(runT * 0.4 + i * 1.7) * 0.6;
 
-    // Kopf (Kreis)
-    const headX = cx - 9 * f, headY = cy - 8;
-    ctx.strokeStyle = INK;
-    ctx.lineWidth = 2.2;
-    ctx.fillStyle = 'rgba(255, 228, 200, 0.95)';
-    ctx.beginPath();
-    ctx.arc(headX, headY, 6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    // --- Rumpf: schwarzer schiefer Block mit handgezeichneten Kanten ---
+    this.drawBody(ctx, cx, cy, f, wobble);
 
-    // Mütze (blaue Kappe)
-    ctx.fillStyle = 'rgba(60, 100, 160, 0.85)';
-    ctx.beginPath();
-    ctx.arc(headX, headY - 2, 6.2, Math.PI, 0);
-    ctx.fill();
-    // Mützenschirm
-    ctx.fillRect(headX - 1 * f, headY - 1, 8 * f, 2);
-    ctx.strokeStyle = INK;
-    ctx.beginPath();
-    ctx.arc(headX, headY - 2, 6.2, Math.PI, 0);
-    ctx.stroke();
+    // --- Kopf + Frisur + Gesicht --- (mittig, plus Trailing-Animation gegen Bewegungsrichtung)
+    // Läuft rechts → Kopf wippt leicht nach hinten (links); läuft links → nach hinten (rechts).
+    // Beim Springen / Schwingen ebenfalls sanft gegen vx versetzt.
+    const speedFrac = Math.max(-1, Math.min(1, this.vx / MOVE_SPEED));
+    const headTilt = -speedFrac * 2.8;  // max ±2.8 px Versatz
+    const headBob  = Math.abs(speedFrac) * 0.6;  // winziges Nicken nach unten wenn in Bewegung
+    const headX = cx + headTilt;
+    const headY = cy - 9 + headBob;
+    this.drawHead(ctx, headX, headY, f, swinging);
 
-    // Gesicht (kleiner Punkt = Auge, kleiner Strich = Mund)
-    dot(ctx, headX + 1 * f, headY, 1.3);
-    ctx.beginPath();
-    ctx.moveTo(headX + 1 * f, headY + 2);
-    ctx.lineTo(headX + 3 * f, headY + 2);
-    ctx.stroke();
-
-    // Arme
+    // --- Arme ---
     ctx.strokeStyle = INK;
     ctx.lineWidth = 2.2;
     ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
     if (swinging) {
-      // Arme beide hoch zur Liane (am Seil)
-      const s = this.swing;
-      const l = s.liana;
-      const handX = cx, handY = cy - 14;
-      // Dummy: zwei Linien vom Rumpf nach oben
+      // Beide Arme nach oben zur Liane — handgezeichnet, leicht auseinander.
       ctx.beginPath();
-      ctx.moveTo(cx - 4, cy - 4);
-      ctx.lineTo(cx - 2, handY);
-      ctx.moveTo(cx + 4, cy - 4);
-      ctx.lineTo(cx + 2, handY);
+      ctx.moveTo(cx - 5, cy - 3);
+      ctx.quadraticCurveTo(cx - 6, cy - 10, cx - 2, cy - 16);
+      ctx.moveTo(cx + 5, cy - 3);
+      ctx.quadraticCurveTo(cx + 6, cy - 10, cx + 2, cy - 16);
       ctx.stroke();
+      // Kleine Fäustchen
+      ctx.fillStyle = 'rgba(255, 220, 190, 0.95)';
+      ctx.beginPath(); ctx.arc(cx - 2, cy - 16, 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx + 2, cy - 16, 2, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
     } else {
-      // Arme seitlich, leicht animiert beim Laufen
-      const t = this.runPhase;
-      const armSwing = this.onGround ? Math.sin(t) * 6 : 0;
+      const armSwing = this.onGround ? Math.sin(runT) * 6 : -2;
+      // Hinterer Arm (Schulter) — nach hinten schwingend
       ctx.beginPath();
-      ctx.moveTo(cx - 4, cy - 2);
-      ctx.lineTo(cx - 10, cy + 8 + armSwing);
-      ctx.moveTo(cx + 4, cy - 2);
-      ctx.lineTo(cx + 10, cy + 8 - armSwing);
+      ctx.moveTo(cx - 4 * f, cy - 3);
+      ctx.quadraticCurveTo(cx - 9 * f, cy + 2, cx - 10 * f, cy + 8 - armSwing * f);
+      // Vorderer Arm — nach vorn schwingend
+      ctx.moveTo(cx + 4 * f, cy - 3);
+      ctx.quadraticCurveTo(cx + 8 * f, cy + 1, cx + 10 * f, cy + 6 + armSwing * f);
       ctx.stroke();
     }
 
-    // Beine
-    const legT = this.runPhase;
-    const legSwing = this.onGround && Math.abs(this.vx) > 20 ? Math.sin(legT) * 5 : 0;
+    // --- Beine ---
+    const legSwing = this.onGround && Math.abs(this.vx) > 20 ? Math.sin(runT) * 5 : 0;
     if (this.ducking) {
       // Hocke: kurze geknickte Beine
       const footY = this.y + this.h;
       ctx.beginPath();
-      ctx.moveTo(cx - 4, cy + 6);
-      ctx.lineTo(cx - 7, footY);
-      ctx.moveTo(cx + 4, cy + 6);
-      ctx.lineTo(cx + 7, footY);
+      ctx.moveTo(cx - 4, cy + 5);
+      ctx.quadraticCurveTo(cx - 8, cy + 9, cx - 7, footY);
+      ctx.moveTo(cx + 4, cy + 5);
+      ctx.quadraticCurveTo(cx + 8, cy + 9, cx + 7, footY);
       ctx.stroke();
     } else {
       ctx.beginPath();
-      ctx.moveTo(cx - 4, cy + 12);
-      ctx.lineTo(cx - 6 + legSwing, cy + 20);
-      ctx.moveTo(cx + 4, cy + 12);
-      ctx.lineTo(cx + 6 - legSwing, cy + 20);
+      ctx.moveTo(cx - 4, cy + 11);
+      ctx.quadraticCurveTo(cx - 5 + legSwing * 0.5, cy + 16, cx - 6 + legSwing, cy + 20);
+      ctx.moveTo(cx + 4, cy + 11);
+      ctx.quadraticCurveTo(cx + 5 - legSwing * 0.5, cy + 16, cx + 6 - legSwing, cy + 20);
+      ctx.stroke();
+      // Kleine Füße als kurze horizontale Striche
+      ctx.beginPath();
+      ctx.moveTo(cx - 6 + legSwing, cy + 20);
+      ctx.lineTo(cx - 3 + legSwing, cy + 20);
+      ctx.moveTo(cx + 6 - legSwing, cy + 20);
+      ctx.lineTo(cx + 3 - legSwing, cy + 20);
       ctx.stroke();
     }
+  }
+
+  // Rumpfkasten — schief und handgemalt, einfarbig schwarz wie im Scribble
+  drawBody(ctx, cx, cy, f, wobble) {
+    const w = 15, h = 18;
+    const x = cx - w / 2;
+    const y = cy - 6;
+    // Leichter "Tilt" beim Laufen (ein paar Grad)
+    const tilt = Math.sin(this.runPhase) * 0.05 * (this.onGround ? 1 : 0) * f;
+    ctx.save();
+    ctx.translate(cx, cy + 3);
+    ctx.rotate(tilt);
+    ctx.translate(-cx, -(cy + 3));
+
+    // Solider Rumpf — Füllung
+    ctx.fillStyle = '#1a1a22';
+    ctx.beginPath();
+    ctx.moveTo(x + wobble(1), y + wobble(2));
+    ctx.lineTo(x + w + wobble(3), y + 1 + wobble(4));
+    ctx.lineTo(x + w - 0.5 + wobble(5), y + h + wobble(6));
+    ctx.lineTo(x + 0.5 + wobble(7), y + h - 0.5 + wobble(8));
+    ctx.closePath();
+    ctx.fill();
+
+    // Handgezeichnete dunkle Kontur
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+
+    // Kleiner Knopf/Kragen in der Mitte, damit der Rumpf nicht zu eintönig wirkt
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, y + 2);
+    ctx.lineTo(cx, y + h - 2);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // Kopf: ovale Birne, wilde Haare oben, großes expressives Gesicht
+  drawHead(ctx, hx, hy, f, swinging) {
+    const rw = 6.2, rh = 7.2;
+
+    // Kontur/Füllung des Kopfes (leicht asymmetrisch wie im Scribble)
+    ctx.fillStyle = '#fae2bf';
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 2.2;
+    ctx.beginPath();
+    // Eigene Kurve statt Ellipse, damit der Kopf "handgezogen" wirkt
+    ctx.moveTo(hx - rw, hy + 1);
+    ctx.bezierCurveTo(hx - rw - 0.5, hy - rh, hx - 1, hy - rh - 1, hx + 1, hy - rh);
+    ctx.bezierCurveTo(hx + rw + 0.5, hy - rh, hx + rw + 1, hy - 1, hx + rw, hy + 2);
+    ctx.bezierCurveTo(hx + rw - 1, hy + rh, hx - 1, hy + rh + 0.5, hx - rw + 0.5, hy + rh - 1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Wilde Haare: 5 zackige Strähnen, gleich abstehend wie im Scribble
+    ctx.strokeStyle = '#17171e';
+    ctx.lineWidth = 2.2;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.fillStyle = '#17171e';
+
+    // Wilde Locken: jede Strähne ist eine kleine Schleife (wie die Locken im Scribble).
+    // Kein spitzes Haar, sondern abstehende, gekringelte Büschel.
+    ctx.lineWidth = 2;
+    const curls = [
+      { bx: -4.5, by: -rh * 0.7,  r: 2.4 },
+      { bx: -2,   by: -rh * 1.15, r: 2.0 },
+      { bx:  1.5, by: -rh * 1.25, r: 2.2 },
+      { bx:  4.5, by: -rh * 0.85, r: 2.1 },
+      { bx:  5.5, by: -rh * 0.2,  r: 1.8 },
+    ];
+    for (const c of curls) {
+      const tipX = hx + c.bx;
+      const tipY = hy + c.by;
+      // Kleine Lockenschleife — nicht ganz geschlossen, wirkt wie ein Haarbüschel
+      ctx.beginPath();
+      ctx.moveTo(tipX - c.r * 0.8, tipY + c.r * 0.5);
+      ctx.bezierCurveTo(
+        tipX - c.r * 1.3, tipY - c.r * 0.8,
+        tipX + c.r * 1.3, tipY - c.r * 0.8,
+        tipX + c.r * 0.8, tipY + c.r * 0.5
+      );
+      ctx.stroke();
+      // Kleine "Locken-Mitte" als dichter Punkt
+      ctx.beginPath();
+      ctx.arc(tipX, tipY + c.r * 0.2, 0.8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Gesicht (sieht in `f`-Richtung)
+    // Auge: runder weißer Kreis mit schwarzer Pupille
+    const eyeX = hx + 1.8 * f;
+    const eyeY = hy - 0.5;
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(eyeX, eyeY, 1.8, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.fillStyle = INK;
+    ctx.beginPath();
+    ctx.arc(eyeX + 0.3 * f, eyeY + 0.2, 0.85, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Augenbraue über dem Auge (gibt Charakter)
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(eyeX - 2, eyeY - 2.4);
+    ctx.quadraticCurveTo(eyeX, eyeY - 3, eyeX + 2, eyeY - 2.4);
+    ctx.stroke();
+
+    // Mund: je nach Zustand — beim Schwingen ein "o", sonst breites Grinsen
+    ctx.lineWidth = 1.3;
+    if (swinging) {
+      ctx.fillStyle = '#5a2a2a';
+      ctx.beginPath();
+      ctx.ellipse(hx + 2 * f, hy + 3, 1.4, 1.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = INK;
+      ctx.stroke();
+    } else {
+      // Grinsen: nach oben geöffneter Bogen mit kleiner Zahnandeutung
+      ctx.strokeStyle = INK;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(hx + 0 * f, hy + 2.5);
+      ctx.quadraticCurveTo(hx + 2.5 * f, hy + 4.5, hx + 4.5 * f, hy + 2.5);
+      ctx.stroke();
+      // Mundinnenraum — kleiner dunkler Strich als "offener Mund"
+      ctx.strokeStyle = 'rgba(100, 30, 30, 0.7)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(hx + 1 * f, hy + 3);
+      ctx.lineTo(hx + 4 * f, hy + 3);
+      ctx.stroke();
+    }
+
+    // Kleiner Nasenpunkt (nicht immer in Skizze, aber verleiht Gesichtsform)
+    ctx.fillStyle = 'rgba(200, 130, 90, 0.6)';
+    ctx.beginPath();
+    ctx.arc(hx + 3 * f, hy + 0.8, 0.6, 0, Math.PI * 2);
+    ctx.fill();
   }
 }
