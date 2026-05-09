@@ -2,14 +2,22 @@
 
 import * as Input from './input.js';
 const { initInput, updateInput, wasPressed, isDown } = Input;
+import { initTouch } from './touch.js';
 import { drawJungleBackground } from './render.js';
-import { buildLevel1 } from './level.js';
+import {
+  buildLevel,
+  loadLevelData,
+  saveLevelData,
+  defaultLevel1Data,
+  cloneLevelData,
+} from './level.js';
 import { Player } from './player.js';
 import { camera, followCamera, centerCameraOn } from './camera.js';
 import { aabbOverlap } from './physics.js';
 import { drawMenu, drawWin, drawLose, drawTimerHud, drawPowerupHud, drawAirBlastHud } from './ui.js';
 import { POWERUP_DURATION } from './powerup.js';
 import { Bubble } from './bubble.js';
+import * as Editor from './editor.js';
 
 const BUBBLE_INTERVAL = 0.35;   // Sekunden zwischen Auto-Shots
 const BUBBLE_RANGE = 520;       // Ziel-Suchradius
@@ -18,9 +26,11 @@ const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const W = canvas.width, H = canvas.height;
 
-let mode = 'menu';          // 'menu' | 'play' | 'win' | 'lose'
+let mode = 'menu';          // 'menu' | 'play' | 'win' | 'lose' | 'edit'
+let prevMode = 'menu';      // Mode vor dem Edit-Wechsel, damit wir zurückspringen können
 let loseReason = 'Autsch!';
 let level;
+let levelData;              // POJO — Editor mutiert diese
 let player;
 
 // Timer
@@ -45,15 +55,44 @@ function saveBestMs(ms) {
 // Aktive Projektile
 let bubbles = [];
 
-function startGame() {
-  level = buildLevel1();
+function rebuildLevel() {
+  level = buildLevel(levelData);
+  // Spieler ggf. an aktuellen Spawn setzen
   player = new Player(level.start.x, level.start.y);
+  bubbles = [];
+}
+
+// Rebuild ohne Player-/Bubble-Reset (für Edit-Modus, damit das Bild aktualisiert wird).
+function rebuildLevelOnly() {
+  level = buildLevel(levelData);
+}
+
+function startGame() {
+  rebuildLevel();
   centerCameraOn(player.x);
   mode = 'play';
   startTime = performance.now();
   elapsedMs = 0;
   finalMs = 0;
-  bubbles = [];
+}
+
+function enterEditor() {
+  prevMode = (mode === 'edit') ? prevMode : mode;
+  // Beim Edit-Modus erstmal Level so wie aktuell stehen lassen, aber den Held einfrieren.
+  // (Beim Verlassen wird das Level frisch aufgebaut.)
+  mode = 'edit';
+  Editor.setActive(true);
+}
+
+function exitEditor() {
+  Editor.setActive(false);
+  // Level frisch aufbauen aus den (möglicherweise geänderten) Daten und neu starten.
+  startGame();
+}
+
+function toggleEditor() {
+  if (mode === 'edit') exitEditor();
+  else                 enterEditor();
 }
 
 function nearestEnemy(fromX, fromY, maxDist) {
@@ -102,7 +141,12 @@ function loop(now) {
 
   updateInput();
 
-  if (mode === 'menu') {
+  // E toggelt den Editor in jedem Modus außer während eines aktiven Game-Overs.
+  if (wasPressed('editor')) toggleEditor();
+
+  if (mode === 'edit') {
+    Editor.updateEditor(dt, level);
+  } else if (mode === 'menu') {
     if (wasPressed('jump')) startGame();
   } else if (mode === 'play') {
     // Player
@@ -253,6 +297,16 @@ function render() {
     }
   }
 
+  // Editor-Overlays liegen direkt auf der Welt (also vor restore)
+  // — werden hier außerhalb der Welt-Translation NACHTRÄGLICH gezeichnet.
+  // Wir wiederholen den Translate für Editor-Helpers:
+  if (mode === 'edit') {
+    ctx.save();
+    ctx.translate(-camera.x, 0);
+    Editor.drawOverlays(ctx, W, H);
+    ctx.restore();
+  }
+
   // Overlays
   const best = getBestMs();
   if (mode === 'menu') drawMenu(ctx, W, H, best);
@@ -261,6 +315,20 @@ function render() {
     drawWin(ctx, W, H, finalMs, best, isNew);
   }
   else if (mode === 'lose') drawLose(ctx, W, H, loseReason, finalMs);
+  else if (mode === 'edit') drawEditModeBanner(ctx, W, H);
+}
+
+function drawEditModeBanner(ctx, W, H) {
+  // Dezenter "EDIT MODE"-Hinweis oben Mitte
+  ctx.save();
+  ctx.fillStyle = 'rgba(255, 216, 74, 0.85)';
+  ctx.fillRect(W / 2 - 70, 60, 140, 26);
+  ctx.fillStyle = '#1a1a2e';
+  ctx.font = "bold 14px system-ui, sans-serif";
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('EDIT MODE — E', W / 2, 73);
+  ctx.restore();
 }
 
 // Beim Sterben rotieren die Gegner und werden nach oben verschoben.
@@ -281,10 +349,90 @@ function drawEnemyWithDying(e) {
 
 function drawPlatforms() {
   if (!level) return;
+  // Hügel zuerst — die Stufen unterhalb gehören dazu und sollen verdeckt werden.
+  drawHill();
   for (const p of level.platforms) {
+    if (p.type === 'hillStep') continue;     // unsichtbar, nur Physik
     if (p.type === 'float') drawFloatPlatform(p);
     else drawGroundPlatform(p);
   }
+}
+
+// Sanfter Grashügel am Levelanfang. Verbindet die Stufen-Tops mit
+// quadratischen Bezier-Kurven zu einer geschwungenen Silhouette.
+// Body grün, oben sandige Bordüre + Grasbüschel — passt zu den anderen Plattformen.
+function drawHill() {
+  if (!level.hills || level.hills.length === 0) return;
+  const steps = level.hills;
+  const groundY = 720;
+
+  // Top-Punkte der Stufen sammeln (linker Rand jeder Stufe + rechter Rand der letzten)
+  const topPoints = [];
+  for (const s of steps) topPoints.push({ x: s.x, y: s.y });
+  const last = steps[steps.length - 1];
+  topPoints.push({ x: last.x + last.w, y: last.y });
+
+  // Body: grünes Polygon, von (0, groundY) hoch über die geschwungene Top-Linie,
+  // bis zum letzten Top-Punkt, dann runter zu (xEnd, groundY) und schließen.
+  ctx.fillStyle = '#7fc060';
+  ctx.beginPath();
+  ctx.moveTo(topPoints[0].x, groundY);
+  ctx.lineTo(topPoints[0].x, topPoints[0].y);
+  // Sanfte Kurve durch die mittleren Punkte (quadratic curve to midpoints)
+  for (let i = 0; i < topPoints.length - 1; i++) {
+    const cur = topPoints[i];
+    const nxt = topPoints[i + 1];
+    const mx = (cur.x + nxt.x) / 2;
+    const my = (cur.y + nxt.y) / 2;
+    ctx.quadraticCurveTo(cur.x, cur.y, mx, my);
+  }
+  ctx.lineTo(last.x + last.w, last.y);
+  ctx.lineTo(last.x + last.w, groundY);
+  ctx.closePath();
+  ctx.fill();
+
+  // Sandige Bordüre 36 px dick entlang des Top-Verlaufs — passt visuell zu Plattformen
+  ctx.fillStyle = '#e0c48a';
+  ctx.beginPath();
+  ctx.moveTo(topPoints[0].x, topPoints[0].y);
+  for (let i = 0; i < topPoints.length - 1; i++) {
+    const cur = topPoints[i];
+    const nxt = topPoints[i + 1];
+    const mx = (cur.x + nxt.x) / 2;
+    const my = (cur.y + nxt.y) / 2;
+    ctx.quadraticCurveTo(cur.x, cur.y, mx, my);
+  }
+  ctx.lineTo(last.x + last.w, last.y);
+  // Untere Kontur des Sandstreifens
+  ctx.lineTo(last.x + last.w, last.y + 36);
+  for (let i = topPoints.length - 1; i > 0; i--) {
+    const cur = topPoints[i];
+    const prv = topPoints[i - 1];
+    const mx = (cur.x + prv.x) / 2;
+    const my = (cur.y + prv.y) / 2 + 36;
+    ctx.quadraticCurveTo(cur.x, cur.y + 36, mx, my);
+  }
+  ctx.lineTo(topPoints[0].x, topPoints[0].y + 36);
+  ctx.closePath();
+  ctx.fill();
+
+  // Top-Konturlinie (ink) entlang der Silhouette
+  ctx.strokeStyle = '#1a1a2e';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(topPoints[0].x, topPoints[0].y);
+  for (let i = 0; i < topPoints.length - 1; i++) {
+    const cur = topPoints[i];
+    const nxt = topPoints[i + 1];
+    const mx = (cur.x + nxt.x) / 2;
+    const my = (cur.y + nxt.y) / 2;
+    ctx.quadraticCurveTo(cur.x, cur.y, mx, my);
+  }
+  ctx.lineTo(last.x + last.w, last.y);
+  ctx.stroke();
+
+  // (Grasbüschel weggelassen — sie hätten auf den horizontalen Stufen-Tops gesessen
+  //  und so die Step-Struktur sichtbar gemacht. Die Bordüre allein reicht.)
 }
 
 function drawGroundPlatform(p) {
@@ -336,9 +484,17 @@ function drawFloatPlatform(p) {
 }
 
 initInput();
-level = buildLevel1();
-player = new Player(level.start.x, level.start.y);
+if ('ontouchstart' in window || (navigator.maxTouchPoints || 0) > 0) initTouch();
+levelData = loadLevelData() || cloneLevelData(defaultLevel1Data);
+rebuildLevel();
 centerCameraOn(player.x);
+Editor.initEditor(levelData, () => {
+  // Daten haben sich geändert → Level-Instanzen neu bauen, damit das Bild folgt.
+  // (Player bleibt für den Edit-Modus stabil; beim Verlassen wird sowieso startGame
+  //  aufgerufen.)
+  rebuildLevelOnly();
+});
+window.addEventListener('liane:toggle-editor', toggleEditor);
 // Debug-Hooks
 window.__game = {
   getMode: () => mode,
