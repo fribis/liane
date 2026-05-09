@@ -17,6 +17,7 @@ const keyMap = {
   'KeyS':       'down',
   'Space':      'jump',
   'KeyR':       'reset',
+  'KeyE':       'editor',
   'Enter':      'jump',
 };
 
@@ -53,3 +54,15 @@ export function updateInput() {
 export function isDown(action) { return down.has(action); }
 export function wasPressed(action) { return pressedThisFrame.has(action); }
 export function wasReleased(action) { return releasedThisFrame.has(action); }
+
+// Touch-Eingabe (von src/touch.js gefüttert). Schreibt in dieselben Sets wie die
+// Keyboard-Handler — der Spielcode sieht keinen Unterschied.
+export function registerTouchPress(action) {
+  if (!down.has(action)) pendingPress.add(action);
+  down.add(action);
+}
+export function registerTouchRelease(action) {
+  if (!down.has(action)) return;
+  down.delete(action);
+  pendingRelease.add(action);
+}

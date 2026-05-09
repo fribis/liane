@@ -2,24 +2,125 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
 <title>Liane – Jump &amp; Swing</title>
+
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#2d5a3a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Liane">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="512x512" href="icons/icon-512.png">
+
 <style>
   html, body {
     margin: 0; padding: 0; background: #2a2a30; height: 100%;
     font-family: 'Comic Sans MS', 'Marker Felt', system-ui, sans-serif;
     overflow: hidden;
     color: #fafaf5;
+    /* iOS: kein Doppeltipp-Zoom, kein Text-Highlight beim Tap */
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    touch-action: none;
+    overscroll-behavior: none;
   }
   #wrap {
     display: flex; align-items: center; justify-content: center;
     height: 100vh;
+    /* Safari: 100vh fasst die URL-Bar nicht — dvh tut’s, fallback bleibt 100vh */
+    height: 100dvh;
   }
   canvas {
     background: #2d5a3a;
     max-width: 100vw; max-height: 100vh;
+    max-height: 100dvh;
     image-rendering: auto;
     box-shadow: 0 0 30px rgba(0,0,0,0.5);
     display: block;
+  }
+
+  /* ─── Touch-Overlay ───────────────────────────────────────────── */
+  #touch-overlay {
+    position: fixed;
+    inset: 0;
+    pointer-events: none;       /* nur die Buttons fangen Touches */
+    display: none;              /* per default versteckt — siehe @media unten */
+    z-index: 10;
+  }
+  #touch-overlay.touch-active { display: block; }
+
+  .touch-btn {
+    position: absolute;
+    pointer-events: auto;
+    background: rgba(255, 255, 255, 0.18);
+    border: 2px solid rgba(255, 255, 255, 0.55);
+    color: #fafaf5;
+    font-family: inherit;
+    font-size: 32px;
+    font-weight: bold;
+    line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 18px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 60ms ease, transform 60ms ease;
+  }
+  .touch-btn:active,
+  .touch-btn.pressed {
+    background: rgba(255, 255, 255, 0.42);
+    transform: scale(0.96);
+  }
+
+  /* D-Pad-Cluster unten links */
+  #dpad {
+    position: absolute;
+    left: max(16px, env(safe-area-inset-left, 16px));
+    bottom: max(16px, env(safe-area-inset-bottom, 16px));
+    width: 200px; height: 200px;
+    pointer-events: none;
+  }
+  #dpad .touch-btn { width: 64px; height: 64px; }
+  #btn-up    { left: 68px; top: 0; }
+  #btn-left  { left: 0; top: 68px; }
+  #btn-right { left: 136px; top: 68px; }
+  #btn-down  { left: 68px; top: 136px; }
+
+  /* Jump-Button unten rechts */
+  #btn-jump {
+    right: max(20px, env(safe-area-inset-right, 20px));
+    bottom: max(40px, env(safe-area-inset-bottom, 40px));
+    width: 130px; height: 130px;
+    border-radius: 50%;
+    font-size: 24px;
+    background: rgba(255, 220, 100, 0.25);
+    border-color: rgba(255, 220, 100, 0.7);
+  }
+
+  /* Hochformat-Hinweis nur auf Touch-Geräten */
+  #rotate-hint {
+    position: fixed; inset: 0;
+    background: #2a2a30;
+    color: #fafaf5;
+    display: none;
+    align-items: center; justify-content: center;
+    text-align: center;
+    font-size: 22px;
+    z-index: 100;
+    padding: 32px;
+  }
+
+  /* Touch-UI nur auf echten Touch-Geräten zeigen */
+  @media (hover: none) and (pointer: coarse) {
+    #touch-overlay { display: block; }
+    /* Im Hochformat: Hinweis statt Spiel */
+    @media (orientation: portrait) {
+      #rotate-hint { display: flex; }
+    }
   }
 </style>
 </head>
@@ -27,9 +128,36 @@
   <div id="wrap">
     <canvas id="game" width="1280" height="720"></canvas>
   </div>
+
+  <div id="touch-overlay" aria-hidden="true">
+    <div id="dpad">
+      <button class="touch-btn" id="btn-up"    data-touch-action="up"    aria-label="Hochklettern">↑</button>
+      <button class="touch-btn" id="btn-left"  data-touch-action="left"  aria-label="Links">←</button>
+      <button class="touch-btn" id="btn-right" data-touch-action="right" aria-label="Rechts">→</button>
+      <button class="touch-btn" id="btn-down"  data-touch-action="down"  aria-label="Ducken">↓</button>
+    </div>
+    <button class="touch-btn" id="btn-jump" data-touch-action="jump" aria-label="Springen / Liane greifen">JUMP</button>
+  </div>
+
+  <div id="rotate-hint">
+    <div>
+      <div style="font-size: 48px; margin-bottom: 16px;">↻</div>
+      <div>Bitte das Gerät querhalten,<br>damit das Spiel passt.</div>
+    </div>
+  </div>
+
   <script type="module">
     // Cache-bust beim Laden, damit Änderungen an Submodulen immer frisch gezogen werden.
     import(`./src/main.js?v=${Date.now()}`);
+  </script>
+
+  <script>
+    // Service-Worker (PWA) — registrieren, aber Fehler ignorieren (z.B. file:// oder Dev).
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('sw.js').catch(() => {});
+      });
+    }
   </script>
 </body>
 </html>
