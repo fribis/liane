@@ -101,6 +101,25 @@
     border-color: rgba(255, 220, 100, 0.7);
   }
 
+  /* Editor-Toggle oben rechts (klein, dezent). Hoher z-index, damit er auch
+     über der Editor-Toolbar bleibt — so kann man den Editor jederzeit verlassen. */
+  #btn-editor {
+    top: max(10px, env(safe-area-inset-top, 10px));
+    right: max(10px, env(safe-area-inset-right, 10px));
+    width: 44px; height: 44px;
+    border-radius: 12px;
+    font-size: 20px;
+    background: rgba(0, 0, 0, 0.32);
+    border-color: rgba(255, 255, 255, 0.4);
+    z-index: 110;
+  }
+  /* Im Edit-Modus auffälliger einfärben (signalisiert "anschalten/verlassen") */
+  body.editor-active #btn-editor {
+    background: rgba(255, 216, 74, 0.92);
+    color: #1a1a2e;
+    border-color: #1a1a2e;
+  }
+
   /* Hochformat-Hinweis nur auf Touch-Geräten */
   #rotate-hint {
     position: fixed; inset: 0;
@@ -137,6 +156,7 @@
       <button class="touch-btn" id="btn-down"  data-touch-action="down"  aria-label="Ducken">↓</button>
     </div>
     <button class="touch-btn" id="btn-jump" data-touch-action="jump" aria-label="Springen / Liane greifen">JUMP</button>
+    <button class="touch-btn" id="btn-editor" aria-label="Editor an/aus">✎</button>
   </div>
 
   <div id="rotate-hint">
@@ -158,6 +178,12 @@
         navigator.serviceWorker.register('sw.js').catch(() => {});
       });
     }
+
+    // Editor-Toggle-Button (sichtbar nur auf Touch-Geräten, fürs Bauen ohne Tastatur).
+    document.getElementById('btn-editor').addEventListener('click', e => {
+      e.preventDefault();
+      window.dispatchEvent(new CustomEvent('liane:toggle-editor'));
+    });
   </script>
 </body>
 </html>
