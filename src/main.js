@@ -14,10 +14,16 @@ import {
 import { Player } from './player.js';
 import { camera, followCamera, centerCameraOn } from './camera.js';
 import { aabbOverlap } from './physics.js';
-import { drawMenu, drawWin, drawLose, drawTimerHud, drawPowerupHud, drawAirBlastHud } from './ui.js';
+import {
+  drawMenu, drawWin, drawLose, drawEndlessOver,
+  drawTimerHud, drawDistanceHud, drawPowerupHud, drawAirBlastHud,
+} from './ui.js';
 import { POWERUP_DURATION } from './powerup.js';
 import { Bubble } from './bubble.js';
 import * as Editor from './editor.js';
+import { buildEndlessLevel, updateEndlessLevel, PX_PER_METER } from './endless.js';
+import { getScores, getBest, submitScore } from './scores.js';
+import * as Leaderboard from './leaderboard.js';
 
 const BUBBLE_INTERVAL = 0.35;   // Sekunden zwischen Auto-Shots
 const BUBBLE_RANGE = 520;       // Ziel-Suchradius
@@ -28,35 +34,26 @@ const W = canvas.width, H = canvas.height;
 
 let mode = 'menu';          // 'menu' | 'play' | 'win' | 'lose' | 'edit'
 let prevMode = 'menu';      // Mode vor dem Edit-Wechsel, damit wir zurückspringen können
+let gameMode = 'level';     // 'level' | 'endless'
+let menuSel = 0;            // 0 = Level, 1 = Endlos
 let loseReason = 'Autsch!';
 let level;
 let levelData;              // POJO — Editor mutiert diese
 let player;
 
-// Timer
-const BEST_KEY = 'liane.bestTime';
-let startTime = 0;
+// Timer (Level-Modus) / Distanz (Endlos-Modus)
 let elapsedMs = 0;
 let finalMs = 0;
-function getBestMs() {
-  const s = localStorage.getItem(BEST_KEY);
-  const n = s ? parseInt(s, 10) : NaN;
-  return Number.isFinite(n) ? n : null;
-}
-function saveBestMs(ms) {
-  const prev = getBestMs();
-  if (prev === null || ms < prev) {
-    localStorage.setItem(BEST_KEY, String(ms));
-    return true;
-  }
-  return false;
-}
+let distanceM = 0;
+// Ergebnis des letzten Laufs für die Bestenliste auf dem End-Screen
+let endRank = -1;
+let endScores = [];
 
 // Aktive Projektile
 let bubbles = [];
 
 function rebuildLevel() {
-  level = buildLevel(levelData);
+  level = gameMode === 'endless' ? buildEndlessLevel() : buildLevel(levelData);
   // Spieler ggf. an aktuellen Spawn setzen
   player = new Player(level.start.x, level.start.y);
   bubbles = [];
@@ -67,19 +64,53 @@ function rebuildLevelOnly() {
   level = buildLevel(levelData);
 }
 
-function startGame() {
+function startGame(gm = gameMode) {
+  gameMode = gm;
   rebuildLevel();
   centerCameraOn(player.x);
   mode = 'play';
-  startTime = performance.now();
   elapsedMs = 0;
   finalMs = 0;
+  distanceM = 0;
+  endRank = -1;
+  endScores = [];
+  Leaderboard.reset();
+  if (gameMode === 'endless') updateEndlessLevel(level, camera, 0);
+}
+
+function goToMenu() {
+  Leaderboard.reset();
+  mode = 'menu';
+  menuSel = gameMode === 'endless' ? 1 : 0;
+}
+
+// Lauf beenden (Tod oder Ziel), lokal und online in die Bestenliste eintragen.
+function endRun(outcome, reason) {
+  finalMs = elapsedMs;
+  loseReason = reason;
+  mode = outcome;
+  if (gameMode === 'endless') {
+    const meters = Math.floor(distanceM);
+    endRank = submitScore('endless', meters);
+    endScores = getScores('endless');
+    if (meters >= 1) Leaderboard.reportRun('endless', meters, finalMs);
+  } else if (outcome === 'win') {
+    const ms = Math.round(finalMs);
+    endRank = submitScore('level', ms);
+    endScores = getScores('level');
+    Leaderboard.reportRun('level', ms, finalMs);
+  }
 }
 
 function enterEditor() {
   prevMode = (mode === 'edit') ? prevMode : mode;
-  // Beim Edit-Modus erstmal Level so wie aktuell stehen lassen, aber den Held einfrieren.
-  // (Beim Verlassen wird das Level frisch aufgebaut.)
+  Leaderboard.reset();
+  // Der Editor bearbeitet immer das handgebaute Level — aus dem Endlos-Modus
+  // heraus wird deshalb erst auf das Level umgeschaltet.
+  if (gameMode === 'endless') {
+    gameMode = 'level';
+    rebuildLevelOnly();
+  }
   mode = 'edit';
   Editor.setActive(true);
 }
@@ -87,7 +118,7 @@ function enterEditor() {
 function exitEditor() {
   Editor.setActive(false);
   // Level frisch aufbauen aus den (möglicherweise geänderten) Daten und neu starten.
-  startGame();
+  startGame('level');
 }
 
 function toggleEditor() {
@@ -98,7 +129,7 @@ function toggleEditor() {
 function nearestEnemy(fromX, fromY, maxDist) {
   let best = null; let bestD = maxDist;
   for (const e of level.enemies) {
-    if (e.dead || e.dying) continue;
+    if (e.dead || e.dying || e.isBoss) continue;   // Boss ist immun gegen Luftblasen
     const a = e.aabb;
     const ex = a.x + a.w / 2;
     const ey = a.y + a.h / 2;
@@ -108,11 +139,23 @@ function nearestEnemy(fromX, fromY, maxDist) {
   return best;
 }
 
+// Gibt den Todesgrund zurück ('Autsch!', 'Verbrannt!') oder null.
 function checkEnemyCollisions() {
   // Dynamische Hitbox vom Spieler (beim Ducken kleiner).
   const pbox = player.hitbox;
   for (const e of level.enemies) {
     if (e.dead || e.dying) continue;
+    if (e.isBoss) {
+      if (e.fireballHits(player)) return 'Verbrannt!';
+      const hit = e.playerContact(player);
+      if (hit === 'stomp') {
+        // kräftiger Abpraller nach links weg vom Boss
+        player.vy = -640;
+        player.vx = -260;
+      }
+      else if (hit === 'kill') return 'Autsch!';
+      continue;
+    }
     if (!aabbOverlap(pbox, e.aabb)) continue;
     // Spinne: Stomp erlaubt — Spieler fällt von oben in die Stomp-Zone → Spinne tot.
     if (e.constructor.name === 'Spider') {
@@ -125,20 +168,41 @@ function checkEnemyCollisions() {
         continue;            // kein Tod für den Spieler
       }
     }
-    return true;
+    return 'Autsch!';
   }
-  return false;
+  return null;
 }
 
 function checkFlag() {
+  if (!level.flag) return false;
+  if (level.boss && !level.boss.defeated) return false;   // erst den Endgegner besiegen
   return aabbOverlap(player.aabb, level.flag.collisionAABB);
+}
+
+// Solange der Endgegner steht, kommt man nicht an ihm vorbei.
+function applyBossWall() {
+  const b = level.boss;
+  if (!b || !b.walls) return;
+  // Grenze an seiner Körpermitte: man kann auf seine vordere Hälfte springen,
+  // aber nicht über ihn hinweg zur Fahne.
+  const limit = b.x - player.w / 2;
+  if (player.x > limit) {
+    player.x = limit;
+    if (player.vx > 0) player.vx = 0;
+  }
 }
 
 let last = performance.now();
 function loop(now) {
   const dt = Math.min(0.033, (now - last) / 1000);
   last = now;
+  step(dt);
+  render();
+  requestAnimationFrame(loop);
+}
 
+// Ein Simulationsschritt (Eingabe + Spiellogik), ohne Zeichnen.
+function step(dt) {
   updateInput();
 
   // E toggelt den Editor in jedem Modus außer während eines aktiven Game-Overs.
@@ -147,10 +211,21 @@ function loop(now) {
   if (mode === 'edit') {
     Editor.updateEditor(dt, level);
   } else if (mode === 'menu') {
-    if (wasPressed('jump')) startGame();
+    if (wasPressed('left') || wasPressed('up'))    menuSel = 0;
+    if (wasPressed('right') || wasPressed('down')) menuSel = 1;
+    if (wasPressed('jump')) startGame(menuSel === 0 ? 'level' : 'endless');
   } else if (mode === 'play') {
+    if (wasPressed('menu')) goToMenu();
+
+    // Endlos: vorne Chunks nachbauen, hinten abräumen
+    if (gameMode === 'endless') updateEndlessLevel(level, camera, distanceM);
+
     // Player
     player.update(dt, level);
+    applyBossWall();
+    if (gameMode === 'endless') {
+      distanceM = Math.max(distanceM, (player.x - level.start.x) / PX_PER_METER);
+    }
 
     // Lianen updaten (idle + aktive gehen über player.swing)
     for (const l of level.lianas) {
@@ -187,7 +262,7 @@ function loop(now) {
     for (const b of bubbles) {
       if (b.dead) continue;
       for (const e of level.enemies) {
-        if (e.dead || e.dying) continue;
+        if (e.dead || e.dying || e.isBoss) continue;
         if (aabbOverlap(b.aabb, e.aabb)) {
           b.dead = true;
           // Gegner nach oben wegschleudern — wird in enemy.update weiter animiert
@@ -215,35 +290,39 @@ function loop(now) {
     // Abgeräumte Bubbles entfernen
     bubbles = bubbles.filter(b => !b.dead && b.life > 0);
 
-    // Fahne
-    level.flag.update(dt);
+    // Fahne (gibt's nur im Level-Modus)
+    level.flag?.update(dt);
 
-    // Kamera
+    // Kamera — im Bosskampf so weit nach rechts schieben, dass der Boss voll im Bild ist
     followCamera(player, level);
+    const boss = level.boss;
+    if (boss && boss.awake && boss.blocksPath) {
+      const minCam = boss.x + 220 - camera.w;
+      if (camera.x < minCam) camera.x += (minCam - camera.x) * Math.min(1, dt * 4);
+    }
 
-    // Timer
-    elapsedMs = performance.now() - startTime;
+    // Timer — über die Simulationszeit summiert, damit er bei pausiertem Tab
+    // (Hintergrund, App-Wechsel am iPad) nicht weiterläuft.
+    elapsedMs += dt * 1000;
 
     // Tod / Ziel
-    if (player.dead) {
-      mode = 'lose';
-      loseReason = 'Abgestürzt!';
-      finalMs = elapsedMs;
-    } else if (checkEnemyCollisions()) {
-      mode = 'lose';
-      loseReason = 'Autsch!';
-      finalMs = elapsedMs;
+    let deathReason = null;
+    if (mode !== 'play') {
+      // per Menü-Taste verlassen
+    } else if (player.dead) {
+      endRun('lose', 'Abgestürzt!');
+    } else if ((deathReason = checkEnemyCollisions())) {
+      endRun('lose', deathReason);
     } else if (checkFlag()) {
-      mode = 'win';
-      finalMs = elapsedMs;
-      saveBestMs(Math.round(finalMs));
+      endRun('win', '');
     }
   } else if (mode === 'win' || mode === 'lose') {
-    if (wasPressed('reset') || wasPressed('jump')) startGame();
+    // Während der Namens-Eingabe nicht versehentlich neu starten (Touch-JUMP etc.)
+    if (Leaderboard.isPromptOpen()) {
+      // nichts
+    } else if (wasPressed('reset') || wasPressed('jump')) startGame();
+    else if (wasPressed('down') || wasPressed('menu')) goToMenu();
   }
-
-  render();
-  requestAnimationFrame(loop);
 }
 
 function render() {
@@ -270,7 +349,7 @@ function render() {
   for (const e of level?.enemies || []) if (e.constructor.name !== 'Bird') drawEnemyWithDying(e);
 
   // Fahne
-  level?.flag.draw(ctx);
+  level?.flag?.draw(ctx);
 
   // Spieler
   player?.draw(ctx);
@@ -285,7 +364,8 @@ function render() {
 
   // Timer-HUD während des Spiels
   if (mode === 'play') {
-    drawTimerHud(ctx, W, H, elapsedMs, getBestMs());
+    if (gameMode === 'endless') drawDistanceHud(ctx, W, H, distanceM, getBest('endless'));
+    else                        drawTimerHud(ctx, W, H, elapsedMs, getBest('level'));
     let slot = 0;
     if (player && player.poweredUp) {
       drawPowerupHud(ctx, W, H, player.jumpBoostRemaining, POWERUP_DURATION, slot);
@@ -308,13 +388,12 @@ function render() {
   }
 
   // Overlays
-  const best = getBestMs();
-  if (mode === 'menu') drawMenu(ctx, W, H, best);
-  else if (mode === 'win') {
-    const isNew = best !== null && Math.round(finalMs) === best;
-    drawWin(ctx, W, H, finalMs, best, isNew);
+  if (mode === 'menu') drawMenu(ctx, W, H, menuSel, getBest('level'), getBest('endless'));
+  else if (mode === 'win') drawWin(ctx, W, H, finalMs, endRank, endScores, Leaderboard.state);
+  else if (mode === 'lose') {
+    if (gameMode === 'endless') drawEndlessOver(ctx, W, H, loseReason, distanceM, endRank, endScores, Leaderboard.state);
+    else                        drawLose(ctx, W, H, loseReason, finalMs);
   }
-  else if (mode === 'lose') drawLose(ctx, W, H, loseReason, finalMs);
   else if (mode === 'edit') drawEditModeBanner(ctx, W, H);
 }
 
@@ -498,12 +577,20 @@ window.addEventListener('liane:toggle-editor', toggleEditor);
 // Debug-Hooks
 window.__game = {
   getMode: () => mode,
+  getGameMode: () => gameMode,
+  getDistance: () => distanceM,
   getPlayer: () => ({ x: player.x, y: player.y, vx: player.vx, vy: player.vy, onGround: player.onGround, swing: !!player.swing, dead: player.dead, poweredUp: player.poweredUp, jumpBoostRemaining: player.jumpBoostRemaining, hasAirBlast: player.hasAirBlast, airBlastRemaining: player.airBlastRemaining, bubbleCooldown: player.bubbleCooldown, ducking: player.ducking }),
   getBubbles: () => bubbles.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, life: b.life })),
   getAliveEnemies: () => level.enemies.filter(e => !e.dead && !e.dying).length,
   getDyingEnemies: () => level.enemies.filter(e => e.dying && !e.dead).length,
   getLevel: () => level,
   startGame,
+  // Spielzeit vorspulen (auch wenn der Tab im Hintergrund ist und rAF pausiert)
+  advance: (seconds) => {
+    const n = Math.round(seconds * 60);
+    for (let i = 0; i < n; i++) step(1 / 60);
+    render();
+  },
   teleport: (x, y) => { player.x = x; player.y = y; player.vx = 0; player.vy = 0; },
   Input,
 };

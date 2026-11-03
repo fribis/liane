@@ -18,11 +18,20 @@ const keyMap = {
   'Space':      'jump',
   'KeyR':       'reset',
   'KeyE':       'editor',
+  'Escape':     'menu',
+  'KeyM':       'menu',
   'Enter':      'jump',
 };
 
+// Tastendrücke in Eingabefeldern (z.B. Namens-Dialog, Editor-Sidebar) gehören nicht dem Spiel.
+function isTyping(e) {
+  const tag = (e.target && e.target.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || tag === 'select';
+}
+
 export function initInput() {
   window.addEventListener('keydown', e => {
+    if (isTyping(e)) return;
     const a = keyMap[e.code];
     if (!a) return;
     if (!down.has(a)) pendingPress.add(a);

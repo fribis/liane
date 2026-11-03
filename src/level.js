@@ -23,6 +23,7 @@ import { Bird } from './enemies/bird.js';
 import { Scorpion } from './enemies/scorpion.js';
 import { Spider } from './enemies/spider.js';
 import { PowerupBlock } from './powerup.js';
+import { Boss } from './enemies/boss.js';
 
 // Bumped beim Hügel-Update — alte Layouts (vor +880 Shift) werden so
 // automatisch verworfen, statt mit kaputten Koordinaten zurückzukommen.
@@ -121,6 +122,10 @@ export const defaultLevel1Data = {
     { x: 2600, y: 300, w: 44, h: 44, type: 'airBlast' },
   ],
 
+  // Endgegner vor der Fahne. arenaStartX: ab hier wacht er auf.
+  // minX/maxX begrenzen seinen letzten Sprung auf die Zielinsel.
+  boss: { x: 5780, groundY: 680, arenaStartX: 5200, minX: 5150, maxX: 5980 },
+
   flag: { x: 6080, groundY: 680 },
 };
 
@@ -158,6 +163,11 @@ export function buildLevel(data = defaultLevel1Data) {
   for (const d of data.birds) level.enemies.push(new Bird({ ...d }));
   for (const d of data.scorpions) level.enemies.push(new Scorpion({ ...d }, level));
   for (const d of data.spiders) level.enemies.push(new Spider({ ...d }));
+
+  // Ältere Editor-Stände (localStorage) kennen den Boss noch nicht → Default nehmen.
+  const bossDef = data.boss !== undefined ? data.boss : defaultLevel1Data.boss;
+  level.boss = bossDef ? new Boss({ ...bossDef }) : null;
+  if (level.boss) level.enemies.push(level.boss);
 
   level.powerups = data.powerups.map(d => new PowerupBlock(d.x, d.y, d.w, d.h, d.type));
 
@@ -257,6 +267,11 @@ export function serializeLevel(data) {
   }
   lines.push('  ],');
   lines.push('');
+  const boss = data.boss !== undefined ? data.boss : defaultLevel1Data.boss;
+  if (boss) {
+    lines.push(`  boss: { x: ${num(boss.x)}, groundY: ${num(boss.groundY)}, arenaStartX: ${num(boss.arenaStartX)}, minX: ${num(boss.minX)}, maxX: ${num(boss.maxX)} },`);
+    lines.push('');
+  }
   lines.push(`  flag: { x: ${num(data.flag.x)}, groundY: ${num(data.flag.groundY)} },`);
   lines.push('};');
   return lines.join('\n');

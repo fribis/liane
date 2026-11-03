@@ -6,6 +6,9 @@
 *.jpg
 *.jpeg
 
+# Lokale Rangliste des Dev-Servers (serve.py)
+.leaderboard-dev.json
+
 # Claude-Code Projektsettings
 /.claude/
 

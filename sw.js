@@ -1,7 +1,7 @@
 // Minimaler Service-Worker für PWA-Install + Offline-Erstaufruf.
 // Strategie: network-first, mit Cache-Fallback. Cache-Version bei Updates erhöhen.
 
-const CACHE = 'liane-v1';
+const CACHE = 'liane-v3';
 const CORE = [
   './',
   './index.html',
@@ -20,9 +20,14 @@ const CORE = [
   './src/liana.js',
   './src/tree.js',
   './src/flag.js',
+  './src/editor.js',
+  './src/endless.js',
+  './src/scores.js',
+  './src/leaderboard.js',
   './src/enemies/bird.js',
   './src/enemies/scorpion.js',
   './src/enemies/spider.js',
+  './src/enemies/boss.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
 ];
@@ -46,6 +51,8 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const req = e.request;
   if (req.method !== 'GET') return;
+  // Rangliste immer live vom Server — nie aus dem Cache.
+  if (new URL(req.url).pathname.startsWith('/api/')) return;
   // Cache-Bust-Querystrings (?v=…) ignorieren wir und cachen nur die Basis-URL.
   e.respondWith(
     fetch(req)
