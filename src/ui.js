@@ -274,7 +274,7 @@ function drawResults(ctx, w, h, format, localRank, localScores, online) {
 }
 
 function footer(ctx, w, y) {
-  sub(ctx, 'SPACE / R: nochmal · ↓ / ESC: Menü', w / 2, y, 22, '#ffdd77');
+  sub(ctx, 'SPACE / R: nochmal · ↓ / ESC / ⌂: Menü', w / 2, y, 22, '#ffdd77');
 }
 
 export function drawWin(ctx, w, h, timeMs, rank, scores, online) {
